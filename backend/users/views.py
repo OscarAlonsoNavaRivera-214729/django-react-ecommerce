@@ -5,7 +5,7 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate
 from .models import User
-from .serializer import *
+from .serializers import *
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
