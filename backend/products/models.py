@@ -145,9 +145,9 @@ class ProductImage(models.Model):
 
     def save(self, *args, **kwargs):
         # Solo una imagen puede ser primaria por producto
-        if self.is_primary:
+        if self.is_primary and self.product_id:
             # Exclude this instance (if it exists) to avoid unnecessary writes
-            qs = ProductImage.objects.filter(product=self.product, is_primary=True)
+            qs = ProductImage.objects.filter(product_id=self.product_id, is_primary=True)
             if self.pk:
                 qs = qs.exclude(pk=self.pk)
             qs.update(is_primary=False)
