@@ -240,3 +240,154 @@ def update_product(request, pk):
         })
     
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+# =============================================================================
+# 5. POST /api/vendor/products/{id}/images/ - Agregar imágenes
+# =============================================================================
+# ¿POR QUÉ ESTE ENDPOINT QUINTO?
+# - Los productos necesitan imágenes para ser atractivos
+# - Maneja la lógica de imagen primaria
+# - Permite múltiples imágenes por product
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated, IsOwnerOrReadOnly])
+def add_product_image(request, pk):
+    """
+    Agregar imagen a producto del vendor
+    
+    BUSINESS LOGIC:
+    - Solo puede agregar imágenes a SUS productos
+    - Si es la primera imagen, se marca como primaria automáticamente
+    - Valida formato y URL de imagen
+    """
+    # Verificar que el usuario es vendor
+    if not request.user.is_vendor:
+        return Response(
+            {"error": "Only vendors can access this endpoint."},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    product = get_object_or_404(Product, pk=pk, seller=request.user)
+
+    # Preparar datos para la imagen
+    image_data = request.data.copy()
+    image_data['product'] = product.pk
+
+    # Si es la primera imagen, marcarla como primaria automáticamente
+    if not product.images.exists():
+        image_data['is_primary'] = True
+
+    serializer = ProductImageSerializer(data=image_data)
+
+    if serializer.is_valid():
+        image = serializer.save()
+
+        return Response({
+            "message": "Image added successfully.",
+            "image": ProductImageSerializer(image).data
+        }, status=status.HTTP_201_CREATED)
+
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+# =============================================================================
+# ENDPOINTS AUXILIARES - Gestión de imágenes
+# =============================================================================
+@api_view(['DELETE'])
+@permission_classes([permissions.IsAuthenticated, IsOwnerOrReadOnly])
+def delete_product_image(request, product_pk, image_pk):
+    """Eliminar imagen del producto"""
+    # Verificar que el usuario es vendor
+    if not request.user.is_vendor:
+        return Response(
+            {"error": "Only vendors can access this endpoint."},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    product = get_object_or_404(Product, pk=product_pk, seller=request.user)
+    image = get_object_or_404(ProductImage, pk=image_pk, product=product)
+
+    was_primary = image.is_primary
+    image.delete()
+
+    # Si era primaria, asignar otra como primaria
+    if was_primary:
+        first_remaining = product.images.first()
+        if first_remaining:
+            first_remaining.is_primary = True
+            first_remaining.save()
+    
+    return Response({"message": "Image deleted successfully."}, status=status.HTTP_200_OK)
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated, IsOwnerOrReadOnly])
+def set_primary_product_image(request, product_pk, image_pk):
+    """Establecer imagen primaria del producto"""
+    # Verificar que el usuario es vendor
+    if not request.user.is_vendor:
+        return Response(
+            {"error": "Only vendors can access this endpoint."},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    product = get_object_or_404(Product, pk=product_pk, seller=request.user)
+    image = get_object_or_404(ProductImage, pk=image_pk, product=product)
+
+    # Desmarcar cualquier imagen primaria existente
+    product.images.update(is_primary=False)
+
+    # Marcar la imagen seleccionada como primaria
+    image.is_primary = True
+    image.save()
+
+    return Response({"message": "Image set as primary successfully."}, status=status.HTTP_200_OK)
+
+# =============================================================================
+# ENDPOINT PARA CAMBIAR ESTADO - Solo draft -> pending
+# =============================================================================
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated, IsOwnerOrReadOnly])
+def submit_product_for_approval(request, pk):
+    """
+    Enviar producto para aprobación (draft -> pending)
+    
+    BUSINESS LOGIC:
+    - Solo productos en 'draft' pueden enviarse para aprobación
+    - Requiere al menos una imagen
+    - Cambia estado a 'pending' para moderación admin
+    """
+    # Verificar que el usuario es vendor
+    if not request.user.is_vendor:
+        return Response(
+            {"error": "Only vendors can access this endpoint."},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    product = get_object_or_404(Product, pk=pk, seller=request.user)
+
+    if product.status != 'draft':
+        return Response(
+            {"error": "Only products in 'draft' status can be submitted for approval."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Validaciones antes de enviar para aprobación
+    errors = []
+    if not product.images.exists():
+        errors.append("At least one product image is required.")
+    if not product.description.strip():
+        errors.append("Product description cannot be empty.")
+    if product.price <= 0:
+        errors.append("Product price must be greater than zero.")
+    if product.stock < 0:
+        errors.append("Product stock cannot be negative.")
+    
+    if errors:
+        return Response({"errors": errors}, status=status.HTTP_400_BAD_REQUEST)
+    
+    # Cambiar status a pending
+    product.status = 'pending'
+    product.save(update_fields=['status'])
+
+    return Response({
+        "message": "Product submitted for approval successfully.", 
+        "product": VendorProductDetailSerializer(product).data
+    }, status=status.HTTP_200_OK)
