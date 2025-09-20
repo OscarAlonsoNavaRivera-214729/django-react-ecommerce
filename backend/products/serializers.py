@@ -28,7 +28,7 @@ class CategorySerializer(serializers.ModelSerializer):
 class ProductImageSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProductImage
-        fields = ['id', 'image_url', 'alt_text', 'is_primary', 'order']
+        fields = ['id', 'product', 'image_url', 'alt_text', 'is_primary', 'order']
 
 class BrandSerializer(serializers.ModelSerializer):
     product_count = serializers.IntegerField(source='products.count', read_only=True)
