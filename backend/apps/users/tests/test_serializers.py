@@ -1,8 +1,8 @@
 # backend/users/test_serializers.py
 import pytest
 from django.contrib.auth import get_user_model
-from users import serializer
-from users.serializer import UserRegistrationSerializer, UserSerializer, LoginSerializer
+from apps.users import serializers
+from apps.users.serializers import UserRegistrationSerializer, UserSerializer, LoginSerializer
 
 User = get_user_model()
 
