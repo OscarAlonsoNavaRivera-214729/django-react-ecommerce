@@ -1,0 +1,69 @@
+services:
+  # =============================================================================
+  # PostgreSQL Database - Desarrollo
+  # =============================================================================
+  db:
+    image: postgres:15-alpine
+    container_name: ecommerce_dev_db
+    restart: unless-stopped
+    environment:
+      # Configuración de PostgreSQL
+      POSTGRES_DB: ecommerce_dev
+      POSTGRES_USER: ecommerce_user
+      POSTGRES_PASSWORD: dev_password123
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+    ports:
+      - "5433:5432"  # Puerto 5433 para evitar conflictos con PostgreSQL local
+    volumes:
+      # Persistencia de datos
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      # Backups directory
+      - ./backups:/var/backups:rw
+    networks:
+      - ecommerce_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ecommerce_user -d ecommerce_dev"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # =============================================================================  
+  # pgAdmin - Interfaz Web para PostgreSQL
+  # =============================================================================
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: ecommerce_pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@ecommerce.com
+      PGADMIN_DEFAULT_PASSWORD: admin123
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: 'False'
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - ecommerce_network
+
+# =============================================================================
+# Volumes - Persistencia de datos
+# =============================================================================
+volumes:
+  postgres_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+
+# =============================================================================
+# Networks - Comunicación entre contenedores (para futuro)
+# =============================================================================
+networks:
+  ecommerce_network:
+    driver: bridge

@@ -2,7 +2,7 @@
 import pytest
 from django.test import RequestFactory
 from django.contrib.auth import get_user_model
-from users.backends import EmailOrUsernameModelBackend
+from apps.users.backends import EmailOrUsernameModelBackend
 
 User = get_user_model()
 

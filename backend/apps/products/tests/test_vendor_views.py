@@ -15,7 +15,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from products.models import Product, Category, Brand, ProductImage
+from apps.products.models import Product, Category, Brand, ProductImage
 
 User = get_user_model()
 
