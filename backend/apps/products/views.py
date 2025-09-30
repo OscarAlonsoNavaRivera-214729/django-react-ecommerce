@@ -3,22 +3,203 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from django.shortcuts import get_object_or_404
-from django.db.models import Q
+from django.db.models import Q, Count, Avg
+from django.utils import timezone
 
-from .models import Product, ProductImage
+from .models import Product, ProductImage, Category, Brand
+from apps.users.models import User
 from .serializers import (
+    #customer serializers
+    ProductSerializer,
+    ProductDetailSerializer,
+    CategorySerializer,
+    BrandSerializer,
+
+    #vendor serializers
     VendorProductListSerializer,
     VendorProductCreateUpdateSerializer,
     VendorProductDetailSerializer,
-    ProductImageSerializer
+    ProductImageSerializer,
+
+    #admin serializers
+    AdminProductListSerializer,
+    AdminProductModerationSerializer,
 )
 from .permissions import IsVendorOrReadOnly, IsOwnerOrReadOnly
+from apps.users.serializers import AdminUserListSerializer, VendorProfileSerializer, AdminVendorModerationSerializer
 
 class ProductPagination(PageNumberPagination):
     """Paginacion personalizada para productos"""
     page_size = 12 #productos por pagina
     page_size_query_param = 'page_size' # parametro que cambia el tamano de la pagina
     max_page_size = 50 # maximo tamano de pagina
+
+class AdminProductPagination(PageNumberPagination):
+    """Paginacion personalizada para admin"""
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+# =============================================================================
+# CUSTOMER ENDPOINTS - APIs Públicas
+# =============================================================================
+# ¿POR QUÉ ESTOS ENDPOINTS?
+# - Permiten a cualquier usuario navegar el catálogo sin autenticación
+# - Solo muestran productos activos de vendors verificados
+# - Ocultan información sensible de moderación
+# - Optimizados con select_related/prefetch_related para performance
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def public_list_products(request):
+    """
+    Lista pública de productos activos
+    """
+    # Base queryset: solo productos activos de vendors verificados
+    queryset = Product.objects.filter(
+        status='active',
+        seller__is_verified_vendor=True,
+        seller__is_active=True
+    ).select_related(
+        'category', 'brand', 'seller'
+    ).prefetch_related('images')
+    
+    # FILTROS
+    category_id = request.GET.get('category')
+    if category_id:
+        queryset = queryset.filter(category_id=category_id)
+    
+    brand_id = request.GET.get('brand')
+    if brand_id:
+        queryset = queryset.filter(brand_id=brand_id)
+    
+    # Filtro de rango de precios
+    min_price = request.GET.get('min_price')
+    if min_price:
+        try:
+            queryset = queryset.filter(price__gte=float(min_price))
+        except ValueError:
+            pass
+    
+    max_price = request.GET.get('max_price')
+    if max_price:
+        try:
+            queryset = queryset.filter(price__lte=float(max_price))
+        except ValueError:
+            pass
+    
+    # Búsqueda de texto
+    search = request.GET.get('search')
+    if search:
+        queryset = queryset.filter(
+            Q(name__icontains=search) | 
+            Q(description__icontains=search) |
+            Q(category__name__icontains=search) |
+            Q(brand__name__icontains=search)
+        )
+    
+    # ORDENAMIENTO
+    ordering = request.GET.get('ordering', '-created_at')
+    valid_orderings = {
+        'price': 'price',
+        '-price': '-price',
+        'created_at': 'created_at',
+        '-created_at': '-created_at',
+        'sales': '-sales_count',  # Más vendidos
+        'views': '-views_count',  # Más vistos
+        'name': 'name',
+        '-name': '-name'
+    }
+    
+    if ordering in valid_orderings:
+        queryset = queryset.order_by(valid_orderings[ordering])
+    else:
+        queryset = queryset.order_by('-created_at')
+    
+    # Paginación
+    paginator = ProductPagination()
+    paginated_products = paginator.paginate_queryset(queryset, request)
+    
+    serializer = ProductSerializer(paginated_products, many=True)
+    
+    return paginator.get_paginated_response({
+        'products': serializer.data,
+        'total_count': queryset.count()
+    })
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def public_product_detail(request, slug):
+    """
+    Detalle público de producto por slug
+    
+    BUSINESS LOGIC:
+    - Solo productos activos de vendors verificados
+    - Incrementa views_count automáticamente
+    - Muestra todas las imágenes e información del seller
+    - Incluye información de categoría y marca
+    """
+    product = get_object_or_404(
+        Product.objects.select_related(
+            'category', 'brand', 'seller'
+        ).prefetch_related('images'),
+        slug=slug,
+        status='active',
+        seller__is_verified_vendor=True,
+        seller__is_active=True
+    )
+    product.increment_views() # Incrementar contador de vistas
+    serializer = ProductDetailSerializer(product)
+
+    return Response({ 'product': serializer.data})
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def public_category_list(request):
+    """Lista pública de categorías activas"""
+    categories = Category.objects.filter(is_active=True).annotate(
+        active_product_count=Count('products', filter=Q(
+            products__status='active',
+            products__seller__is_verified_vendor=True,
+            products__seller__is_active=True 
+        ))
+    ).order_by('name')
+
+    serializer = CategorySerializer(categories, many=True)
+    return Response({
+        'categories': serializer.data,
+        'total_count': categories.count()
+    })
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def public_brand_list(request):
+    """Lista pública de marcas activas"""
+    brand = Brand.objects.filter(is_active=True).annotate(
+        active_product_count=Count('products', filter=Q(
+            products__status='active',
+            products__seller__is_verified_vendor=True,
+            products__seller__is_active=True 
+        ))
+    ).order_by('name')
+
+    serializer = BrandSerializer(brand, many=True)
+    return Response({
+        'brands': serializer.data,
+        'total_count': brand.count()
+    })
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def public_products_search (request):
+    """
+    Busqueda pública de productos (similar a public_list_products)
+
+    Este endpoint duplica funcionalidad de public_product_list pero
+    con énfasis en búsqueda de texto. Podría consolidarse en producción.
+    """
+    # Reutilizar la lógica de public_list_products
+    return public_list_products(request)
 
 # =============================================================================
 # 1. POST /api/vendor/products/ - Crear producto
