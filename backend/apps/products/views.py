@@ -9,24 +9,19 @@ from django.utils import timezone
 from .models import Product, ProductImage, Category, Brand
 from apps.users.models import User
 from .serializers import (
-    #customer serializers
+    # Customer serializers
     ProductSerializer,
     ProductDetailSerializer,
     CategorySerializer,
     BrandSerializer,
-
-    #vendor serializers
+    
+    # Vendor serializers  
     VendorProductListSerializer,
     VendorProductCreateUpdateSerializer,
     VendorProductDetailSerializer,
-    ProductImageSerializer,
-
-    #admin serializers
-    AdminProductListSerializer,
-    AdminProductModerationSerializer,
+    ProductImageSerializer
 )
 from .permissions import IsVendorOrReadOnly, IsOwnerOrReadOnly
-from apps.users.serializers import AdminUserListSerializer, VendorProfileSerializer, AdminVendorModerationSerializer
 
 class ProductPagination(PageNumberPagination):
     """Paginacion personalizada para productos"""
