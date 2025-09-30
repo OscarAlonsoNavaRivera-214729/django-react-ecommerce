@@ -19,9 +19,15 @@ from .serializers import (
     VendorProductListSerializer,
     VendorProductCreateUpdateSerializer,
     VendorProductDetailSerializer,
-    ProductImageSerializer
+    ProductImageSerializer,
+    
+    # Admin serializers
+    AdminProductListSerializer
 )
 from .permissions import IsVendorOrReadOnly, IsOwnerOrReadOnly
+
+# Import user serializers for admin endpoints
+from apps.users.serializers import VendorProfileSerializer, AdminUserListSerializer
 
 class ProductPagination(PageNumberPagination):
     """Paginacion personalizada para productos"""
@@ -566,4 +572,294 @@ def submit_product_for_approval(request, pk):
     return Response({
         "message": "Product submitted for approval successfully.", 
         "product": VendorProductDetailSerializer(product).data
+    }, status=status.HTTP_200_OK)
+
+# =============================================================================
+# ADMIN ENDPOINTS - Moderación y Gestión
+# =============================================================================
+# ¿POR QUÉ ESTOS ENDPOINTS?
+# - Permiten a admins moderar productos y vendors
+# - Workflow completo: aprobar/rechazar con trazabilidad
+# - Gestión de vendors: verificación y desactivación
+# - Dashboard con estadísticas para toma de decisiones
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated, permissions.IsAdminUser])
+def admin_product_list(request):
+    """
+    Lista TODOS los productos para moderación admin
+    
+    BUSINESS LOGIC:
+    - Admin ve TODOS los productos sin restricción
+    - Filtros: estado, vendedor, categoría, búsqueda
+    - Incluye información del seller y estado de moderación
+    - Paginación más grande (20 items)
+    
+    Query Params:
+    - status: draft, pending, active, rejected, inactive
+    - seller: ID del vendedor
+    - category: ID de categoría
+    - search: Búsqueda en nombre/descripción
+    """
+    # Admin ve TODOS los productos
+    queryset = Product.objects.all().select_related(
+        'category', 'brand', 'seller', 'approved_by'
+    ).prefetch_related('images')
+    
+    # FILTROS
+    status_filter = request.GET.get('status')
+    if status_filter:
+        queryset = queryset.filter(status=status_filter)
+    
+    seller_id = request.GET.get('seller')
+    if seller_id:
+        queryset = queryset.filter(seller_id=seller_id)
+    
+    category_id = request.GET.get('category')
+    if category_id:
+        queryset = queryset.filter(category_id=category_id)
+    
+    search = request.GET.get('search')
+    if search:
+        queryset = queryset.filter(
+            Q(name__icontains=search) | 
+            Q(description__icontains=search) |
+            Q(seller__username__icontains=search) |
+            Q(seller__store_name__icontains=search)
+        )
+    
+    # Ordenamiento por defecto: pending primero, luego por fecha
+    queryset = queryset.order_by(
+        '-status',  # pending aparecen primero
+        '-created_at'
+    )
+    
+    # Paginación admin (más items)
+    paginator = AdminProductPagination()
+    paginated_products = paginator.paginate_queryset(queryset, request)
+    
+    serializer = AdminProductListSerializer(paginated_products, many=True)
+    
+    # Estadísticas globales
+    stats = {
+        'total_products': Product.objects.count(),
+        'pending_products': Product.objects.filter(status='pending').count(),
+        'active_products': Product.objects.filter(status='active').count(),
+        'rejected_products': Product.objects.filter(status='rejected').count(),
+        'draft_products': Product.objects.filter(status='draft').count(),
+    }
+    
+    return paginator.get_paginated_response({
+        'products': serializer.data,
+        'stats': stats
+    })
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated, permissions.IsAdminUser])
+def admin_approve_product(request, pk):
+    """
+    Aprobar producto (pending → active)
+    
+    BUSINESS LOGIC:
+    - Solo productos en 'pending' pueden aprobarse
+    - Registra quién y cuándo aprobó (trazabilidad)
+    - Limpia rejection_reason si existía
+    - Producto queda visible públicamente
+    """
+    product = get_object_or_404(
+        Product.objects.select_related('seller'),
+        pk=pk
+    )
+    
+    if product.status != 'pending':
+        return Response(
+            {"error": f"Only products with 'pending' status can be approved. Current status: {product.status}"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Aprobar producto
+    product.status = 'active'
+    product.approved_by = request.user
+    product.approved_at = timezone.now()
+    product.rejection_reason = ''
+    product.save(update_fields=['status', 'approved_by', 'approved_at', 'rejection_reason'])
+    
+    serializer = VendorProductDetailSerializer(product)
+    
+    return Response({
+        'message': 'Product approved successfully',
+        'product': serializer.data
+    }, status=status.HTTP_200_OK)
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated, permissions.IsAdminUser])
+def admin_reject_product(request, pk):
+    """
+    Rechazar producto (pending → rejected)
+    
+    BUSINESS LOGIC:
+    - Solo productos en 'pending' pueden rechazarse
+    - Razón de rechazo es OBLIGATORIA
+    - Registra quién rechazó (trazabilidad)
+    - Vendor puede editar y reenviar
+    
+    Body:
+    - rejection_reason: string (obligatorio)
+    """
+    product = get_object_or_404(
+        Product.objects.select_related('seller'),
+        pk=pk
+    )
+    
+    if product.status != 'pending':
+        return Response(
+            {"error": f"Only products with 'pending' status can be rejected. Current status: {product.status}"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Validar razón de rechazo
+    rejection_reason = request.data.get('rejection_reason', '').strip()
+    if not rejection_reason:
+        return Response(
+            {"error": "Rejection reason is required"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Rechazar producto
+    product.status = 'rejected'
+    product.rejection_reason = rejection_reason
+    product.approved_by = request.user  # Registrar quién rechazó
+    product.approved_at = timezone.now()
+    product.save(update_fields=['status', 'rejection_reason', 'approved_by', 'approved_at'])
+    
+    serializer = VendorProductDetailSerializer(product)
+    
+    return Response({
+        'message': 'Product rejected successfully',
+        'product': serializer.data
+    }, status=status.HTTP_200_OK)
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated, permissions.IsAdminUser])
+def admin_vendor_list(request):
+    """
+    Lista de vendors para gestión admin
+    
+    BUSINESS LOGIC:
+    - Lista TODOS los usuarios con role='vendor'
+    - Incluye métricas: total productos, productos activos
+    - Muestra estado de verificación
+    - Filtros: verificado, activo, búsqueda
+    
+    Query Params:
+    - is_verified: true/false
+    - is_active: true/false
+    - search: Búsqueda en username/email/store_name
+    """
+    # Filtrar solo vendors
+    queryset = User.objects.filter(role='vendor')
+    
+    # FILTROS
+    is_verified = request.GET.get('is_verified')
+    if is_verified is not None:
+        is_verified_bool = is_verified.lower() == 'true'
+        queryset = queryset.filter(is_verified_vendor=is_verified_bool)
+    
+    is_active = request.GET.get('is_active')
+    if is_active is not None:
+        is_active_bool = is_active.lower() == 'true'
+        queryset = queryset.filter(is_active=is_active_bool)
+    
+    search = request.GET.get('search')
+    if search:
+        queryset = queryset.filter(
+            Q(username__icontains=search) |
+            Q(email__icontains=search) |
+            Q(store_name__icontains=search)
+        )
+    
+    # Ordenar por fecha de registro
+    queryset = queryset.order_by('-created_at')
+    
+    # Paginación
+    paginator = AdminProductPagination()
+    paginated_vendors = paginator.paginate_queryset(queryset, request)
+    
+    serializer = AdminUserListSerializer(paginated_vendors, many=True)
+    
+    # Estadísticas de vendors
+    stats = {
+        'total_vendors': User.objects.filter(role='vendor').count(),
+        'verified_vendors': User.objects.filter(role='vendor', is_verified_vendor=True).count(),
+        'unverified_vendors': User.objects.filter(role='vendor', is_verified_vendor=False).count(),
+        'active_vendors': User.objects.filter(role='vendor', is_active=True).count(),
+    }
+    
+    return paginator.get_paginated_response({
+        'vendors': serializer.data,
+        'stats': stats
+    })
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated, permissions.IsAdminUser])
+def admin_verify_vendor(request, pk):
+    """
+    Verificar vendor (permitir vender productos)
+    
+    BUSINESS LOGIC:
+    - Solo usuarios con role='vendor' pueden verificarse
+    - Vendor verificado puede crear y vender productos
+    - Acción reversible (puede desverificarse)
+    
+    Body (opcional):
+    - is_verified: boolean (default: true)
+    """
+    vendor = get_object_or_404(User, pk=pk, role='vendor')
+    
+    # Por defecto verificar, pero permitir desverificar
+    is_verified = request.data.get('is_verified', True)
+    
+    vendor.is_verified_vendor = is_verified
+    vendor.save(update_fields=['is_verified_vendor'])
+    
+    action = 'verified' if is_verified else 'unverified'
+    
+    serializer = VendorProfileSerializer(vendor)
+    
+    return Response({
+        'message': f'Vendor {action} successfully',
+        'vendor': serializer.data
+    }, status=status.HTTP_200_OK)
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated, permissions.IsAdminUser])
+def admin_toggle_vendor_status(request, pk):
+    """
+    Activar/Desactivar vendor
+    
+    BUSINESS LOGIC:
+    - Desactivar vendor oculta todos sus productos
+    - Vendor desactivado no puede iniciar sesión
+    - Acción reversible
+    
+    Body (opcional):
+    - is_active: boolean (default: toggle actual)
+    """
+    vendor = get_object_or_404(User, pk=pk, role='vendor')
+    
+    # Por defecto toggle, pero permitir especificar
+    is_active = request.data.get('is_active')
+    if is_active is None:
+        is_active = not vendor.is_active
+    
+    vendor.is_active = is_active
+    vendor.save(update_fields=['is_active'])
+    
+    action = 'activated' if is_active else 'deactivated'
+    
+    serializer = VendorProfileSerializer(vendor)
+    
+    return Response({
+        'message': f'Vendor {action} successfully',
+        'vendor': serializer.data
     }, status=status.HTTP_200_OK)

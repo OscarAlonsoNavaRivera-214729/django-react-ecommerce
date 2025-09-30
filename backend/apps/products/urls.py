@@ -45,9 +45,14 @@ urlpatterns = [
     path('<slug:slug>/', views.public_product_detail, name='product-detail'),    # GET: Detalle de producto por slug
     
     # =============================================================================
-    # ADMIN ENDPOINTS - Moderación y gestión (futuro)
+    # ADMIN ENDPOINTS - Moderación y gestión
     # =============================================================================
-    # path('admin/', include('products.admin_urls')),  # Futuro
+    path('admin/products/', views.admin_product_list, name='admin-product-list'),                      # GET: Lista productos para moderación
+    path('admin/products/<int:pk>/approve/', views.admin_approve_product, name='admin-product-approve'), # POST: Aprobar producto
+    path('admin/products/<int:pk>/reject/', views.admin_reject_product, name='admin-product-reject'),   # POST: Rechazar producto
+    path('admin/vendors/', views.admin_vendor_list, name='admin-vendor-list'),                         # GET: Lista vendors
+    path('admin/vendors/<int:pk>/verify/', views.admin_verify_vendor, name='admin-vendor-verify'),     # POST: Verificar vendor
+    path('admin/vendors/<int:pk>/toggle/', views.admin_toggle_vendor_status, name='admin-vendor-toggle'), # POST: Activar/desactivar vendor
 ]
 
 # Comentado hasta implementar las vistas correspondientes
