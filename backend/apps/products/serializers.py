@@ -15,7 +15,7 @@ User = get_user_model()
 # =============================================================================
 
 class CategorySerializer(serializers.ModelSerializer):
-    product_count = serializers.IntegerField(source='products.count', read_only=True)
+    product_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Category
@@ -23,7 +23,21 @@ class CategorySerializer(serializers.ModelSerializer):
         read_only_fields = ['slug']
     
     def get_product_count(self, obj):
-        return obj.products.filter(status='active').count()
+        """
+        Cuenta solo productos activos de vendors verificados
+        BUSINESS LOGIC:
+        - Solo productos visibles públicamente
+        - Excluye draft, pending, rejected, inactive
+        """
+        if hasattr(obj, 'active_product_count'):
+            # Si viene de annotate() en la vista
+            return obj.active_product_count
+        # Fallback si se llama sin annotate
+        return obj.products.filter(
+            status='active',
+            seller__is_verified_vendor=True,
+            seller__is_active=True
+        ).count()
 
 class ProductImageSerializer(serializers.ModelSerializer):
     class Meta:
@@ -31,12 +45,29 @@ class ProductImageSerializer(serializers.ModelSerializer):
         fields = ['id', 'product', 'image_url', 'alt_text', 'is_primary', 'order']
 
 class BrandSerializer(serializers.ModelSerializer):
-    product_count = serializers.IntegerField(source='products.count', read_only=True)
+    product_count = serializers.SerializerMethodField()
     
     class Meta:
         model = Brand
         fields = ['id', 'name', 'slug', 'description', 'logo_url', 'website', 'product_count']
         read_only_fields = ['slug']
+    
+    def get_product_count(self, obj):
+        """
+        Cuenta solo productos activos de vendors verificados
+        BUSINESS LOGIC:
+        - Solo productos visibles públicamente
+        - Excluye draft, pending, rejected, inactive
+        """
+        if hasattr(obj, 'active_product_count'):
+            # Si viene de annotate() en la vista
+            return obj.active_product_count
+        # Fallback si se llama sin annotate
+        return obj.products.filter(
+            status='active',
+            seller__is_verified_vendor=True,
+            seller__is_active=True
+        ).count()
 
 class SellerInfoSerializer(serializers.ModelSerializer):
     """Información básica del vendedor para mostrar en productos"""
